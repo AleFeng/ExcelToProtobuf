@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <!-- 允许在只装有更高版本运行时（如 .NET 9/10）的机器上直接运行 -->
+    <RollForward>Major</RollForward>
+    <RootNamespace>ExcelToProtobuf</RootNamespace>
+    <AssemblyName>ExcelToProtobuf</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 读取 xlsx（2.6.2 为无需额外接受 OSMF EULA 标志的最后版本） -->
+    <PackageReference Include="NPOI" Version="2.6.2" />
+    <!-- Protobuf 运行时（与 Unity 侧插件、既有生成代码保持 3.11.2 兼容） -->
+    <PackageReference Include="Google.Protobuf" Version="3.11.2" />
+    <!-- 自带跨平台 protoc（3.11.2，输出与既有 golden 文件一致）；仅编译期使用 -->
+    <PackageReference Include="Google.Protobuf.Tools" Version="3.11.2" GeneratePathProperty="true" PrivateAssets="all" />
+    <!-- Roslyn：在进程内把生成的 .cs 编译为内存程序集，取代硬编码 csc.exe -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
+  </ItemGroup>
+
+  <!-- 把 Google.Protobuf.Tools 附带的 protoc 复制到输出目录 protoc_tools/<rid>/ -->
+  <ItemGroup>
+    <None Include="$(PkgGoogle_Protobuf_Tools)\tools\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>protoc_tools\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
+</Project>

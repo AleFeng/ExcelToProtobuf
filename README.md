@@ -58,7 +58,7 @@ ExcelToProtobuf 是一套面向 `Unity` 项目的**配置表工作流工具**，
 ## 工具特性
 | 特性             | 描述                                                                                     |
 | ---------------- | ---------------------------------------------------------------------------------------- |
-| 一键流水线       | 双击 `ExcelToProtobuf.exe` 即可完成 Excel→Proto→C#→DLL→二进制数据 全部步骤，无需人工干预。   |
+| 一键流水线       | 一条命令即可完成 Excel→Proto→C#→(内存编译)→二进制数据 全部步骤，无需人工干预。               |
 | Excel 驱动       | 字段名、数据类型、配置数据全部来自 Excel 表格，策划维护表格即可，程序无需改动。               |
 | 强类型访问       | 生成标准 Protobuf C# 类，程序端以强类型 + `Map<int, T>` 主键的方式读取配置。                 |
 | 高效序列化       | 运行期加载的是 Protobuf 二进制（`.bytes`），体积小、解析快，适合正式包体。                    |
@@ -68,11 +68,14 @@ ExcelToProtobuf 是一套面向 `Unity` 项目的**配置表工作流工具**，
 | 可扩展 proto     | `Config/Proto` 下可放置手写的 `.proto`，与表格生成的 proto 一起编译。                         |
 
 ## 💻 环境要求
-- **Windows** 操作系统。流水线依赖 `.bat` 批处理、`protoc.exe`（win64）与系统自带 `csc.exe`，目前仅支持 Windows。
-- **.NET Framework 4.7.1**（见 `App.config`）。编译 `ConfigProto.dll` 使用 `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`，需确保该路径存在。
-- **protoc 3.11.2**（已随仓库附带于 `Tools/ExcelToProtobuf/protoc-3.11.2-win64/`，无需另行安装）。
-- **NPOI / Google.Protobuf**（相关 DLL 已随 `bin/Debug` 附带，无需另行安装）。
-- 消费端为 **Unity 工程**，运行期需要引用 `Google.Protobuf` 以反序列化 `.bytes` 数据。
+**转换器工具（独立 .NET 程序，在 Unity 外运行）**
+- **.NET 8 SDK** 或更高。工具为 SDK 风格项目，用 `dotnet build` / `dotnet run` 构建运行，或 `dotnet publish` 成自包含便携 exe 以保留双击即用。
+- 依赖全部通过 NuGet 自动还原：`NPOI`（读 xlsx）、`Google.Protobuf` 与 `Google.Protobuf.Tools`（自带跨平台 `protoc`）、`Microsoft.CodeAnalysis.CSharp`（Roslyn 内存编译）。
+- **跨平台**：Windows / macOS / Linux 均可运行，不再依赖 `.bat` 批处理或系统 `csc.exe`。
+
+**Unity 运行时包（UPM）**
+- Unity **2021.3** 或更高；脚本 API 兼容级别 `.NET Standard 2.0/2.1`。
+- 随包内置 `Google.Protobuf`（netstandard2.0），用于反序列化 `.bytes`，无需另行引入。
 
 ## 📁 目录结构
 ```
@@ -81,32 +84,39 @@ ExcelToProtobuf/
 │  ├─ Excel/                                  # ← 策划编辑的配置表（*.xlsx），工具的输入
 │  └─ Proto/                                  # ← 手写的 .proto（可选，会被一并编译）
 │
-├─ Assets/                                    # Unity 工程
+├─ Assets/                                    # 示例 / 消费端（Unity 资源）
+│  ├─ Plugins/Google.Protobuf/                # Google.Protobuf.dll（供生成的配置类在本工程内编译）
 │  ├─ Source/System/ConfigSystem/Config/      # → 生成的配置类 *.cs（自动同步、增量覆盖）
 │  ├─ ProductAssets/Config/                   # → 序列化后的二进制 *.bytes（运行期加载）
 │  └─ UnProductAssets/Config/                 # → 明文 *.txt（仅供核对，不进正式包）
 │
-└─ Tools/ExcelToProtobuf/
-   ├─ bin/Debug|Release/ExcelToProtobuf.exe   # 主程序（双击运行）
-   ├─ Protos/                                 # 中间产物：生成 / 收集到的 .proto
-   ├─ Csharp/                                 # 中间产物：protoc 生成的 .cs 及编译出的 ConfigProto.dll
-   ├─ protoc.exe · protoc-3.11.2-win64/       # protobuf 编译器
-   ├─ BuildProtos.bat                         # .proto → .cs
-   └─ BuildDLL.bat                            # .cs → ConfigProto.dll
+├─ com.alefeng.exceltoprotobuf/               # UPM 包（可通过 git URL 安装）
+│  ├─ package.json
+│  ├─ Runtime/                                # ConfigManager、字节来源、asmdef、Plugins/Google.Protobuf.dll
+│  └─ Samples~/BasicUsage/                    # 运行时加载示例
+│
+└─ Tools/ExcelToProtobuf/                     # 转换器（独立 .NET 8 命令行工具）
+   ├─ ExcelToProtobuf.csproj · .sln           # SDK 风格工程（NuGet 还原依赖，可从零编译）
+   ├─ Program.cs                              # 管线编排 + 路径配置
+   ├─ PipelineConfig.cs                       # 输入/输出路径（默认沿用仓库布局，可用参数覆盖）
+   ├─ Excel2Proto.cs                          # Excel → .proto
+   ├─ Excel2Bytes.cs                          # Excel → .bytes / .txt
+   ├─ ProtocRunner.cs                         # 调用 protoc（.proto → .cs）
+   └─ RoslynCompiler.cs                       # Roslyn 内存编译 .cs（供反射序列化）
 ```
 
 > [!NOTE]
-> 主程序通过**相对目录结构**定位各路径：以可执行文件所在的 `bin/Debug`（或 `bin/Release`）向上回溯两级得到 `Tools/ExcelToProtobuf`，再向上两级得到仓库根目录。因此请保持上述目录层级不变，直接双击 `bin` 下的 exe 运行即可。
+> 工具默认从可执行文件位置**向上查找**包含 `Config/Excel` 的仓库根目录来定位输入/输出，因此无需固定的目录层级。也可用命令行参数覆盖任意路径（见 [运行工具](#2-运行工具)）。
 
 ## 🔄 工作流程
 主程序（`Program.cs`）依次执行以下 6 个步骤，控制台会打印每一步的进度：
 
-1. **【Excel 转 Proto】** —— 遍历 `Config/Excel/` 下所有 `.xlsx`，按表格结构为**每个 Sheet** 生成一个 `.proto` 文件，输出到 `Tools/ExcelToProtobuf/Protos/`。
-2. **【Proto 拷贝】** —— 把 `Config/Proto/` 下手写的 `.proto` 一并拷贝到 `Protos/`，与自动生成的 proto 共同参与编译。
-3. **【Proto 转 C#】** —— 调用 `BuildProtos.bat`（内部执行 `protoc`），把 `Protos/*.proto` 生成为 C# 类，输出到 `Csharp/`。
-4. **【C# 拷贝至 Unity】** —— 把 `Csharp/*.cs` 同步到 `Assets/Source/System/ConfigSystem/Config/`。按文件哈希比对，**相同则跳过、变化则覆盖、废弃则删除**。
-5. **【C# 转 DLL】** —— 调用 `BuildDLL.bat`（内部执行 `csc`），把 `Csharp/*.cs` 编译为 `ConfigProto.dll`（供下一步反射加载）。
-6. **【序列化保存配置表数据】** —— 加载 `ConfigProto.dll`，再次读取 Excel 数据行，逐行填充 Protobuf 对象，序列化为 `.bytes` 输出到 `Assets/ProductAssets/Config/`；同时输出明文 `.txt` 到 `Assets/UnProductAssets/Config/`。
+1. **【Excel 转 Proto】** —— 遍历 `Config/Excel/` 下所有 `.xlsx`，按表格结构为**每个 Sheet** 生成一个 `.proto` 文件（输出到中间目录）。
+2. **【Proto 拷贝】** —— 把 `Config/Proto/` 下手写的 `.proto` 一并纳入，与自动生成的 proto 共同参与编译。
+3. **【Proto 转 C#】** —— 直接调用 `protoc`（来自 NuGet `Google.Protobuf.Tools`，跨平台）把 `*.proto` 生成为 C# 类。
+4. **【C# 拷贝至 Unity】** —— 把生成的 `*.cs` 同步到 `Assets/Source/System/ConfigSystem/Config/`。按文件哈希比对，**相同则跳过、变化则覆盖、废弃则删除**。
+5. **【C# 内存编译】** —— 用 **Roslyn** 在进程内把生成的 `.cs` 编译为内存程序集（不再落地 `ConfigProto.dll`，也不依赖系统 `csc`）。
+6. **【序列化保存配置表数据】** —— 用上一步的内存程序集，逐行填充 Protobuf 对象，序列化为 `.bytes` 输出到 `Assets/ProductAssets/Config/`；同时输出明文 `.txt` 到 `Assets/UnProductAssets/Config/`。
 
 > [!TIP]
 > 每个 Sheet 会生成两个 message：数据类 `SheetName` 与容器类 `SheetName_Map`（内部是 `map<int32, SheetName> Items`）。运行期只需解析容器类，即可通过主键 `Id` 快速索引任意一行数据。
@@ -124,8 +134,22 @@ ExcelToProtobuf/
 | （数据）   | 1001 | AttrCheck   | `__END__` |
 
 ### 2. 运行工具
-双击运行 `Tools/ExcelToProtobuf/bin/Debug/ExcelToProtobuf.exe`（或 `bin/Release/` 下的同名程序）。  
-控制台会依次输出 6 个步骤的日志，出现「流程执行完毕，按任意键退出」即表示成功。
+在仓库根目录执行（首次会自动还原 NuGet 依赖）：
+```bash
+dotnet run --project Tools/ExcelToProtobuf
+```
+控制台会依次输出 6 个步骤的日志，末尾出现「流程执行完毕」即表示成功。
+
+需要「双击即用」的便携程序时，发布自包含 exe：
+```bash
+dotnet publish Tools/ExcelToProtobuf -c Release -r win-x64 --self-contained
+```
+
+可用命令行参数覆盖默认路径，例如：
+```bash
+dotnet run --project Tools/ExcelToProtobuf -- --excel D:/MyGame/Config/Excel --bytes-out D:/MyGame/Assets/Config
+```
+支持的参数：`--excel`、`--proto-src`、`--proto-out`、`--cs-gen`、`--cs-out`、`--bytes-out`、`--txt-out`。
 
 ### 3. 查看产物
 运行完成后，你会在以下位置看到自动生成的产物：
@@ -186,26 +210,37 @@ ExcelToProtobuf/
 字典类型的单元格用 `{}` 包裹，键值对之间用逗号 `,` 分隔，键与值之间用冒号 `:` 分隔，例如：`{1:100,2:200}`。
 
 ## 🧩 在 Unity 中使用
-生成的 C# 类是标准的 Protobuf 消息，运行期通过容器类的 `Parser` 反序列化 `.bytes` 即可。以下为**示例**（实际的资源加载方式取决于你的项目，如 `Resources` / `Addressables` / `StreamingAssets`）：
+### 安装（UPM，git URL）
+`Window → Package Manager → + → Install package from git URL...`，粘贴：
+```
+https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf
+```
+或在 `Packages/manifest.json` 的 `dependencies` 中加入：
+```json
+"com.alefeng.exceltoprotobuf": "https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf"
+```
+包内已内置 `Google.Protobuf`，并提供运行时加载器 `ConfigManager`。
 
+> [!NOTE]
+> 本仓库的 `Assets/Plugins/Google.Protobuf/` 是**示例工程自用**的依赖；如果你已通过上面的 UPM 包引入了 `Google.Protobuf`，请勿再把该目录一并拷进项目，以免程序集重复冲突。
+
+### 用 ConfigManager 加载（推荐）
+把转换器生成的 `.bytes` 放到 `Resources/Config/` 下（例如 `Resources/Config/Adventure_Condition.bytes`），并把生成的配置类 `.cs` 加入工程，然后：
 ```csharp
-using Deploy; // 生成类的命名空间
+using Deploy;            // 生成类的命名空间
+using ExcelToProtobuf;   // UPM 包提供的加载器
 
-// 1. 以任意方式拿到 .bytes 的字节数组（此处以 Resources 为例）
-TextAsset asset = Resources.Load<TextAsset>("Config/Adventure_Condition");
-
-// 2. 解析容器类（SheetName_Map）
-Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
-
-// 3. 通过主键 Id 直接索引某一行配置
-Adventure_Condition cfg = map.Items[1001];
+var config = new ConfigManager();                                   // 默认 Resources/Config
+Adventure_Condition_Map map = config.Load<Adventure_Condition_Map>(); // 按类型名自动推断表名，带缓存
+Adventure_Condition cfg = map.Items[1001];                          // 按主键 Id 取一行
 Debug.Log(cfg.ClassName);
+```
+更换资源来源（Addressables / StreamingAssets 等）：实现 `IConfigBytesProvider` 并传入 `new ConfigManager(myProvider)`。
 
-// 也可以遍历全部配置
-foreach (var kv in map.Items)
-{
-    Debug.Log($"{kv.Key} => {kv.Value.ClassName}");
-}
+### 手动解析（不使用本包）
+生成的 C# 类是标准 Protobuf 消息，也可直接用容器类的 `Parser` 反序列化：
+```csharp
+Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
 ```
 
 > [!TIP]
@@ -216,10 +251,10 @@ foreach (var kv in map.Items)
 ### 新增一张配置表
 1. 在 `Config/Excel/` 下新建 `.xlsx`（或在已有工作簿中新增 Sheet）。
 2. 按 [填表规则](#-excel-填表规则) 填好前 4 行表头与数据行。
-3. 重新运行 `ExcelToProtobuf.exe`。生成的类会自动同步到 Unity，废弃的旧表类会被自动清理。
+3. 重新运行 `dotnet run --project Tools/ExcelToProtobuf`。生成的类会自动同步到 Unity，废弃的旧表类会被自动清理。
 
 ### 手写 proto 文件
-如果你有一些不来自 Excel 的数据结构（如公共枚举、嵌套结构），可以把手写的 `.proto` 放到 `Config/Proto/` 目录，运行时会被自动拷贝进 `Protos/` 并一起编译成 C#。
+如果你有一些不来自 Excel 的数据结构（如公共枚举、嵌套结构），可以把手写的 `.proto` 放到 `Config/Proto/` 目录，运行时会与表格生成的 proto 一起编译成 C#。
 
 ### 扩展数据类型
 若需要支持新的字段类型，需同时修改两处映射（保持一致）：
@@ -229,16 +264,15 @@ foreach (var kv in map.Items)
 ## 🚧 注意事项与常见问题
 - **Sheet 名称不可重复**：即使在不同的 Excel 文件中，Sheet 名也必须全局唯一，否则会因容器类冲突导致「可能存在重复的 Excel 表 Sheet 名称」错误。
 - **proto 文件不可重名**：由于所有 `.proto` 会被收集到同一目录编译，即使位于不同文件夹也不能重名（含 `Config/Proto/` 下手写的 proto）。
-- **保持目录结构**：工具通过相对路径定位输入输出目录，请勿移动 `Config/`、`Assets/…/Config/`、`Tools/ExcelToProtobuf/` 的相对层级。
-- **csc / protoc 路径**：`BuildDLL.bat` 依赖 `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`；`protoc` 版本为 `3.11.2`。若环境不同请相应调整。
+- **输入/输出路径**：默认从可执行文件位置向上查找含 `Config/Excel` 的仓库根目录；若目录布局不同，用命令行参数（`--excel` / `--cs-out` / `--bytes-out` 等）显式指定。
+- **依赖与版本**：`protoc` 与 `Google.Protobuf` 由 NuGet 提供，固定为 `3.11.2`（与随包的 Unity `Google.Protobuf.dll` 保持兼容）；无需系统 `csc` 或手动安装 protoc。
 - **表格有效性**：一张表至少要包含 4 行表头 + 结束标记才会被识别为有效表；数据行首列遇到 `__END__` 即停止读取。
 
 ## 📋 待办事项列表
+- ✅ 已完成：SDK 风格工程 + NuGet 依赖，可从零编译；移除 `.bat` 与硬编码 `csc.exe`（改用 Roslyn 内存编译）；跨平台 `protoc`；路径参数化；封装为 UPM 包并提供运行时 `ConfigManager`。
 - **工具健壮性**
-  - 移除对固定 `csc.exe` 绝对路径的依赖，支持更灵活的 .NET / 编译环境。
   - 更完善的错误提示与失败中断处理（当前部分错误仅打印日志后继续）。
-- **跨平台**
-  - 摆脱 `.bat` 与 win64 `protoc`，探索跨平台（macOS / Linux）运行方案。
+  - 数组/字典解析对值内含分隔符（`,` / `:`）的支持（当前为朴素切分，属已知限制）。
 - **易用性**
   - 提供图形界面或 Unity 编辑器内一键导出入口。
-  - 支持配置化的路径与导出选项（替代当前硬编码的目录约定）。
+  - 支持多版本 `Google.Protobuf` 与更高 protobuf 版本的对齐升级。

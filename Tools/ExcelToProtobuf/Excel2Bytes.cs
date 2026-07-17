@@ -3,8 +3,8 @@ using Google.Protobuf.Collections;
 using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -16,15 +16,20 @@ namespace ExcelToProtobuf
     public class Excel2Bytes
     {
         private static string m_ExcelFilePath = string.Empty;
-		private static string m_CfgBytesPathDir = string.Empty;
-		private static string m_CfgTxtPathDir = string.Empty;
-		private static Assembly m_ConfigDllAssembly;
+        private static string m_CfgBytesPathDir = string.Empty;
+        private static string m_CfgTxtPathDir = string.Empty;
+        private static Assembly m_ConfigDllAssembly;
 
-		public static void Compiler(string srcDllPathFile, string srcExcelPathDir, string destCfgBytesPathDir, string destCfgTxtPathDir)
+        // 数值解析统一使用不变区域，避免受机器区域设置（小数点/千位分隔符）影响
+        private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
+
+        // 直接接收已编译好的配置程序集（由 Roslyn 在内存中编译，取代旧的 ConfigProto.dll）
+        public static void Compiler(Assembly configAssembly, string srcExcelPathDir, string destCfgBytesPathDir, string destCfgTxtPathDir)
         {
-            if (!File.Exists(srcDllPathFile))
+            if (configAssembly == null)
             {
-                Console.WriteLine($">> 转换失败 >> 源dll文件路径不存在-{srcDllPathFile}");
+                Console.WriteLine($">> 转换失败 >> 配置程序集为空");
                 return;
             }
 
@@ -34,57 +39,32 @@ namespace ExcelToProtobuf
                 return;
             }
 
-            if (!Directory.Exists(destCfgBytesPathDir))
-            {
-                Console.WriteLine($">> 转换失败 >> 目标配置二进制文件夹路径不存在-{destCfgBytesPathDir}");
-                return;
-            }
+            Directory.CreateDirectory(destCfgBytesPathDir);
+            Directory.CreateDirectory(destCfgTxtPathDir);
 
-            if (!Directory.Exists(destCfgTxtPathDir))
-            {
-                Console.WriteLine($">> 转换失败 >> 源配置Json文件夹路径不存在-{destCfgTxtPathDir}");
-                return;
-            }
+            m_ConfigDllAssembly = configAssembly;
+            m_CfgBytesPathDir = destCfgBytesPathDir;
+            m_CfgTxtPathDir = destCfgTxtPathDir;
 
-            m_ConfigDllAssembly = Assembly.LoadFile(srcDllPathFile);
-
-			m_CfgBytesPathDir = destCfgBytesPathDir;
-			m_CfgTxtPathDir = destCfgTxtPathDir;
-			//清空旧Config二进制文件
-			if (Directory.Exists(m_CfgBytesPathDir))
-            {
-				DirectoryInfo dir = new DirectoryInfo(m_CfgBytesPathDir);
-				if (dir.Exists)
-				{
-					FileInfo[] files = dir.GetFiles();
-					foreach (var file in files)
-					{
-                        if (file.Name.EndsWith(".meta")) { continue; }
-
-                        file.Delete();
-					}
-				}
-            }
-			//清空旧Config文本文件
-			if (Directory.Exists(m_CfgTxtPathDir))
-			{
-				DirectoryInfo dir = new DirectoryInfo(m_CfgTxtPathDir);
-				if (dir.Exists)
-				{
-					FileInfo[] files = dir.GetFiles();
-					foreach (var file in files)
-					{
-                        if (file.Name.EndsWith(".meta")) { continue; }
-
-                        file.Delete();
-					}
-				}
-			}
+            //清空旧Config二进制文件
+            ClearDir(m_CfgBytesPathDir);
+            //清空旧Config文本文件
+            ClearDir(m_CfgTxtPathDir);
 
             string[] excelFilePaths = Directory.GetFiles(srcExcelPathDir, "*.xlsx", SearchOption.AllDirectories);
             for (int i = 0; i < excelFilePaths.Length; i++)
             {
                 OpenExcel(excelFilePaths[i]);
+            }
+        }
+
+        private static void ClearDir(string dir)
+        {
+            if (!Directory.Exists(dir)) return;
+            foreach (var file in new DirectoryInfo(dir).GetFiles())
+            {
+                if (file.Name.EndsWith(".meta")) { continue; }
+                file.Delete();
             }
         }
 
@@ -109,14 +89,14 @@ namespace ExcelToProtobuf
             }
         }
 
-        // 三个文件：序列化后二进制文件、位置文件、明文数据
+        // 两个文件：序列化后二进制文件、明文数据
         private static void WriteData(ISheet sheet)
         {
-			List<string> repeatedList = new List<string>(); //已经处理过的数组
-			int Nums = sheet.LastRowNum; // 行数
+            List<string> repeatedList = new List<string>(); //已经处理过的数组
+            int Nums = sheet.LastRowNum; // 行数
             if (Nums > 4)
             {
-				object configIns = m_ConfigDllAssembly.CreateInstance("Deploy." + sheet.SheetName + "_Map"); // 创建数据容器类
+                object configIns = m_ConfigDllAssembly.CreateInstance("Deploy." + sheet.SheetName + "_Map"); // 创建数据容器类
                 if (configIns == null)
                 {
                     Console.WriteLine($">> 转换失败 >> 可能存在重复的Excel表Sheet名称！ExcelPath-{m_ExcelFilePath} SheetName-{sheet.SheetName}");
@@ -149,16 +129,18 @@ namespace ExcelToProtobuf
                 for (int i = 4; i < Nums; i++)
                 {
                     IRow rowData = sheet.GetRow(i);
-                    if (rowData.GetCell(0).ToString() == "__END__") { break; }  // 结束标志放在第一列 
+                    if (rowData == null) { continue; }                       // 空行跳过，避免空引用
+                    ICell firstCell = rowData.GetCell(0);
+                    if (firstCell != null && firstCell.ToString() == "__END__") { break; }  // 结束标志放在第一列
 
                     //检查并记录ID
                     int id = 0;
                     var idCell = rowData.GetCell(validColIndex[0]);
                     string idString = idCell != null ? idCell.ToString().Trim() : string.Empty;
                     if (string.IsNullOrEmpty(idString)) { continue; }
-                    id = int.Parse(idString);
-                    
-					object dataIns = m_ConfigDllAssembly.CreateInstance("Deploy." + sheet.SheetName); // 数据实例
+                    id = int.Parse(idString, Inv);
+
+                    object dataIns = m_ConfigDllAssembly.CreateInstance("Deploy." + sheet.SheetName); // 数据实例
                     for (int j = 0; j < validColIndex.Count; j++)
                     {
                         int index = validColIndex[j];
@@ -169,64 +151,64 @@ namespace ExcelToProtobuf
                         var valueCell = rowData.GetCell(index);
                         string value = valueCell != null ? valueCell.ToString().Trim() : string.Empty;
 
-						//是否为repeated数据
-						if (fieldName.Contains("_"))
-						{
-							fieldName = fieldName.Split('_')[0];
-							if (repeatedList.Contains(fieldName))
-							{
-								continue;
-							}
-							else
-							{
-								repeatedList.Add(fieldName);
-								type = $"{type}Array";
-								value = $"[ {value}";
-								//遍历获取所有repeated数据
-								for (int k = 0; k < validColIndex.Count; k++)
-								{
-									string fieldNameRpt = nameRow.GetCell(validColIndex[k]) != null ? nameRow.GetCell(validColIndex[k]).ToString() : string.Empty;
-									if (fieldNameRpt.Contains("_") && fieldNameRpt.StartsWith(fieldName))
-									{
-										string valueRpt = rowData.GetCell(validColIndex[k]) != null ? rowData.GetCell(validColIndex[k]).ToString() : string.Empty;
-										value = $"{value},{valueRpt}";
-									}
-								}
-								value = $"{value} ]";
-							}
-						}
+                        //是否为repeated数据
+                        if (fieldName.Contains("_"))
+                        {
+                            fieldName = fieldName.Split('_')[0];
+                            if (repeatedList.Contains(fieldName))
+                            {
+                                continue;
+                            }
+                            else
+                            {
+                                repeatedList.Add(fieldName);
+                                type = $"{type}Array";
+                                value = $"[ {value}";
+                                //遍历获取所有repeated数据
+                                for (int k = 0; k < validColIndex.Count; k++)
+                                {
+                                    string fieldNameRpt = nameRow.GetCell(validColIndex[k]) != null ? nameRow.GetCell(validColIndex[k]).ToString() : string.Empty;
+                                    if (fieldNameRpt.Contains("_") && fieldNameRpt.StartsWith(fieldName))
+                                    {
+                                        string valueRpt = rowData.GetCell(validColIndex[k]) != null ? rowData.GetCell(validColIndex[k]).ToString() : string.Empty;
+                                        value = $"{value},{valueRpt}";
+                                    }
+                                }
+                                value = $"{value} ]";
+                            }
+                        }
 
-						if (value.Length > 0)
-						{
-							//采用字段不使用属性是因为repeated没有set方法
-							string first = fieldName.First().ToString().ToLower();
-							string sub = fieldName.Substring(1);
-							FieldInfo fieldInfo = dataIns.GetType().GetField($"{first}{sub}_", BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (value.Length > 0)
+                        {
+                            //采用字段不使用属性是因为repeated没有set方法
+                            string first = fieldName.First().ToString().ToLower();
+                            string sub = fieldName.Substring(1);
+                            FieldInfo fieldInfo = dataIns.GetType().GetField($"{first}{sub}_", BindingFlags.NonPublic | BindingFlags.Instance);
                             try
                             {
                                 object realVal = GetRealVal(type, value); //获取真实值
                                 fieldInfo.SetValue(dataIns, realVal);
                             }
-                            catch(Exception e)
+                            catch (Exception)
                             {
                                 Console.WriteLine($">> 转换失败 >> 值或类型不合法 filePath-{m_ExcelFilePath} value-{value} type-{type}");
                             }
-						}
-					}
+                        }
+                    }
 
-					//Add进Map
-					MethodInfo addMethod = propertyInfo.PropertyType.GetMethod("Add", new Type[] { typeof(int), dataIns.GetType() }); // 获取容器Add方法,需要标明具体添加哪种类型
+                    //Add进Map
+                    MethodInfo addMethod = propertyInfo.PropertyType.GetMethod("Add", new Type[] { typeof(int), dataIns.GetType() }); // 获取容器Add方法,需要标明具体添加哪种类型
                     try
                     {
                         addMethod?.Invoke(ItemsVal, new[] { id, dataIns });
                     }
-                    catch(Exception e)
+                    catch (Exception)
                     {
                         Console.WriteLine($">> 转换失败 >> 重复的ID filePath-{m_ExcelFilePath} ID-{id}");
                     }
-				}
-				SaveCfgSerializeFile(configIns, sheet.SheetName);
-				SaveCfgTxtFile(configIns, sheet.SheetName);
+                }
+                SaveCfgSerializeFile(configIns, sheet.SheetName);
+                SaveCfgTxtFile(configIns, sheet.SheetName);
             }
         }
 
@@ -239,23 +221,26 @@ namespace ExcelToProtobuf
                 case "string":
                     return value;
                 case "stringArray":
+                case "stringarray":
                     return HandlerArray(value, (sVal) => { return sVal.Trim(); });
                 case "int":
-                    return int.Parse(value);
+                    return int.Parse(value, Inv);
                 case "intArray":
-                    return HandlerArray(value, (sVal) => { return int.Parse(sVal); });
+                case "intarray":
+                    return HandlerArray(value, (sVal) => { return int.Parse(sVal, Inv); });
                 case "float":
-                    return float.Parse(value);
+                    return float.Parse(value, Inv);
                 case "floatArray":
-                    return HandlerArray(value, (sVal) => { return float.Parse(sVal); });
+                case "floatarray":
+                    return HandlerArray(value, (sVal) => { return float.Parse(sVal, Inv); });
                 case "map<int,int>":
-                    return HandlerMap(value, (sVal1) => { return int.Parse(sVal1); }, (sVal2) => { return int.Parse(sVal2); });
+                    return HandlerMap(value, (sVal1) => { return int.Parse(sVal1, Inv); }, (sVal2) => { return int.Parse(sVal2, Inv); });
                 case "map<int,string>":
-                    return HandlerMap(value, (sVal1) => { return int.Parse(sVal1); }, (sVal2) => { return sVal2.Trim(); });
+                    return HandlerMap(value, (sVal1) => { return int.Parse(sVal1, Inv); }, (sVal2) => { return sVal2.Trim(); });
                 case "map<string,string>":
                     return HandlerMap(value, (sVal1) => { return sVal1.Trim(); }, (sVal2) => { return sVal2.Trim(); });
                 case "map<string,int>":
-                    return HandlerMap(value, (sVal1) => { return sVal1.Trim(); }, (sVal2) => { return int.Parse(sVal2); });
+                    return HandlerMap(value, (sVal1) => { return sVal1.Trim(); }, (sVal2) => { return int.Parse(sVal2, Inv); });
                 default:
                     Console.WriteLine($">> 转换失败 >> 类型不合法 filePath-{m_ExcelFilePath} type-{type}");
                     return value;
@@ -263,7 +248,7 @@ namespace ExcelToProtobuf
         }
 
         // 返回数组，[]包裹 ,分隔
-        private static RepeatedField<T> HandlerArray<T>(string value, Func<string,T> func)
+        private static RepeatedField<T> HandlerArray<T>(string value, Func<string, T> func)
         {
             if (null == value) { return null; }
 
@@ -305,21 +290,16 @@ namespace ExcelToProtobuf
             using (FileStream fs = new FileStream(filePath, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite))
             {
                 MessageExtensions.WriteTo(obj as IMessage, fs);
-				Console.WriteLine($">> 转换完成 >> {fileName}");
-			}
+                Console.WriteLine($">> 转换完成 >> {fileName}");
+            }
         }
 
         // 明文数据
         private static void SaveCfgTxtFile(object obj, string sheetName)
         {
             string fileName = sheetName + ".txt";
-            using (FileStream fs = new FileStream(Path.Combine(m_CfgTxtPathDir, fileName), FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite))
-            {
-                string content = obj.ToString();
-                byte[] datas = Encoding.Default.GetBytes(content);
-                byte[] newDatas = Encoding.Convert(Encoding.Default, Encoding.UTF8, datas); // 不转换一下就出现乱码的情况 
-                fs.Write(newDatas, 0, newDatas.Length);
-            }
+            // 直接以 UTF-8（无 BOM）写出明文，避免旧代码中依赖系统默认编码的乱码转换
+            File.WriteAllText(Path.Combine(m_CfgTxtPathDir, fileName), obj.ToString(), Utf8NoBom);
         }
     }
 }

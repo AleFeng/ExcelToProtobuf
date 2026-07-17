@@ -58,7 +58,7 @@ ExcelToProtobuf は `Unity` プロジェクト向けの**コンフィグワー�
 ## 特徴
 | 特徴                | 説明                                                                                          |
 | ------------------- | --------------------------------------------------------------------------------------------- |
-| ワンクリック処理    | `ExcelToProtobuf.exe` をダブルクリックするだけで Excel→Proto→C#→DLL→バイナリの全工程が自動実行。  |
+| ワンクリック処理    | 1 つのコマンドで Excel→Proto→C#→(メモリ内コンパイル)→バイナリの全工程が自動実行。                |
 | Excel 駆動          | フィールド名・データ型・データはすべて Excel 表由来。プランナーは表を編集するだけで済みます。      |
 | 強い型付け          | 標準の Protobuf C# クラスを生成し、`Map<int, T>` の主キーで強く型付けされたコンフィグを取得。      |
 | 効率的なバイナリ    | ランタイムは軽量な Protobuf バイナリ（`.bytes`）を読み込みます。小さく高速で、製品ビルド向け。      |
@@ -68,11 +68,14 @@ ExcelToProtobuf は `Unity` プロジェクト向けの**コンフィグワー�
 | 拡張可能な proto    | `Config/Proto` に置いた手書きの `.proto` も、生成された proto と一緒にコンパイルされます。          |
 
 ## 💻 動作環境
-- **Windows** OS。パイプラインは `.bat` バッチ、`protoc.exe`（win64）、システムの `csc.exe` に依存するため、現状 Windows のみ対応です。
-- **.NET Framework 4.7.1**（`App.config` 参照）。`ConfigProto.dll` のコンパイルには `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` を使うため、このパスが存在する必要があります。
-- **protoc 3.11.2**（`Tools/ExcelToProtobuf/protoc-3.11.2-win64/` に同梱済み。別途インストール不要）。
-- **NPOI / Google.Protobuf**（関連 DLL は `bin/Debug` に同梱済み。別途インストール不要）。
-- 利用側は **Unity プロジェクト**で、ランタイムに `.bytes` をデシリアライズするため `Google.Protobuf` への参照が必要です。
+**変換ツール（独立した .NET プログラム、Unity 外で実行）**
+- **.NET 8 SDK** 以上。SDK スタイルのプロジェクトで、`dotnet build` / `dotnet run` でビルド・実行、または `dotnet publish` で自己完結型の携帯 exe を作成できます（ダブルクリック実行も維持）。
+- 依存はすべて NuGet から自動復元：`NPOI`（xlsx 読込）、`Google.Protobuf` と `Google.Protobuf.Tools`（クロスプラットフォームの `protoc` 同梱）、`Microsoft.CodeAnalysis.CSharp`（Roslyn メモリ内コンパイル）。
+- **クロスプラットフォーム**：Windows / macOS / Linux で動作。`.bat` バッチやシステムの `csc.exe` には依存しません。
+
+**Unity ランタイムパッケージ（UPM）**
+- Unity **2021.3** 以上；スクリプト API 互換レベル `.NET Standard 2.0/2.1`。
+- `.bytes` をデシリアライズするための `Google.Protobuf`（netstandard2.0）をパッケージに同梱。別途導入は不要です。
 
 ## 📁 ディレクトリ構成
 ```
@@ -81,32 +84,39 @@ ExcelToProtobuf/
 │  ├─ Excel/                                  # ← プランナーが編集する表（*.xlsx）——入力
 │  └─ Proto/                                  # ← 手書きの .proto（任意、一緒にコンパイル）
 │
-├─ Assets/                                    # Unity プロジェクト
+├─ Assets/                                    # サンプル / 利用側（Unity アセット）
+│  ├─ Plugins/Google.Protobuf/                # Google.Protobuf.dll（生成クラスを本プロジェクトでコンパイルするため）
 │  ├─ Source/System/ConfigSystem/Config/      # → 生成されたコンフィグクラス *.cs（自動同期・増分）
 │  ├─ ProductAssets/Config/                   # → シリアライズ済みバイナリ *.bytes（ランタイム読込）
 │  └─ UnProductAssets/Config/                 # → プレーンテキスト *.txt（確認用、製品には含めない）
 │
-└─ Tools/ExcelToProtobuf/
-   ├─ bin/Debug|Release/ExcelToProtobuf.exe   # メインプログラム（ダブルクリックで実行）
-   ├─ Protos/                                 # 中間成果物：生成／収集された .proto
-   ├─ Csharp/                                 # 中間成果物：protoc 生成の .cs とコンパイル済み ConfigProto.dll
-   ├─ protoc.exe · protoc-3.11.2-win64/       # protobuf コンパイラ
-   ├─ BuildProtos.bat                         # .proto → .cs
-   └─ BuildDLL.bat                            # .cs → ConfigProto.dll
+├─ com.alefeng.exceltoprotobuf/               # UPM パッケージ（git URL で導入可能）
+│  ├─ package.json
+│  ├─ Runtime/                                # ConfigManager、バイト供給、asmdef、Plugins/Google.Protobuf.dll
+│  └─ Samples~/BasicUsage/                    # ランタイム読込サンプル
+│
+└─ Tools/ExcelToProtobuf/                     # 変換ツール（独立した .NET 8 CLI）
+   ├─ ExcelToProtobuf.csproj · .sln           # SDK スタイル（NuGet 復元、クリーンなクローンからビルド可能）
+   ├─ Program.cs                              # パイプライン制御 + パス設定
+   ├─ PipelineConfig.cs                       # 入出力パス（既定はリポジトリ構成、引数で上書き可）
+   ├─ Excel2Proto.cs                          # Excel → .proto
+   ├─ Excel2Bytes.cs                          # Excel → .bytes / .txt
+   ├─ ProtocRunner.cs                         # protoc 呼び出し（.proto → .cs）
+   └─ RoslynCompiler.cs                       # Roslyn による .cs のメモリ内コンパイル（リフレクション用）
 ```
 
 > [!NOTE]
-> プログラムは**相対ディレクトリ構造**で各パスを特定します。実行ファイルのある `bin/Debug`（または `bin/Release`）から 2 階層上って `Tools/ExcelToProtobuf`、さらに 2 階層上ってリポジトリのルートを得ます。この階層構造を保ったまま、`bin` 配下の exe をダブルクリックで実行してください。
+> ツールは実行ファイルの位置から**上方向に探索**して `Config/Excel` を含むリポジトリルートを特定するため、固定の階層は不要です。任意のパスはコマンドライン引数で上書きできます（[ツールを実行する](#2-ツールを実行する) 参照）。
 
 ## 🔄 処理フロー
 メインプログラム（`Program.cs`）は次の 6 ステップを順に実行し、各ステップの進捗をコンソールに出力します。
 
-1. **【Excel → Proto】** —— `Config/Excel/` 配下のすべての `.xlsx` を走査し、**Sheet ごと**に 1 つの `.proto` を生成して `Tools/ExcelToProtobuf/Protos/` へ出力します。
-2. **【Proto コピー】** —— `Config/Proto/` の手書き `.proto` も `Protos/` へコピーし、生成された proto と一緒にコンパイル対象にします。
-3. **【Proto → C#】** —— `BuildProtos.bat`（内部で `protoc` を実行）を呼び、`Protos/*.proto` から C# クラスを生成して `Csharp/` へ出力します。
-4. **【C# を Unity へコピー】** —— `Csharp/*.cs` を `Assets/Source/System/ConfigSystem/Config/` へ同期します。ハッシュ比較により、**同一はスキップ・変更は上書き・不要は削除**します。
-5. **【C# → DLL】** —— `BuildDLL.bat`（内部で `csc` を実行）を呼び、`Csharp/*.cs` を `ConfigProto.dll` へコンパイルします（次ステップでリフレクション読込）。
-6. **【コンフィグデータのシリアライズ保存】** —— `ConfigProto.dll` を読み込み、Excel のデータ行を再度読み取って行ごとに Protobuf オブジェクトへ格納し、`.bytes` として `Assets/ProductAssets/Config/` へ出力。あわせてプレーンテキスト `.txt` を `Assets/UnProductAssets/Config/` へ出力します。
+1. **【Excel → Proto】** —— `Config/Excel/` 配下のすべての `.xlsx` を走査し、**Sheet ごと**に 1 つの `.proto` を生成します（中間ディレクトリへ出力）。
+2. **【Proto コピー】** —— `Config/Proto/` の手書き `.proto` も取り込み、生成された proto と一緒にコンパイル対象にします。
+3. **【Proto → C#】** —— `protoc`（NuGet の `Google.Protobuf.Tools`、クロスプラットフォーム）を直接呼び出し、`.proto` から C# クラスを生成します。
+4. **【C# を Unity へコピー】** —— 生成した `*.cs` を `Assets/Source/System/ConfigSystem/Config/` へ同期します。ハッシュ比較により、**同一はスキップ・変更は上書き・不要は削除**します。
+5. **【C# メモリ内コンパイル】** —— **Roslyn** で生成した `.cs` をメモリ内アセンブリにコンパイルします（`ConfigProto.dll` を書き出さず、システムの `csc` にも依存しません）。
+6. **【コンフィグデータのシリアライズ保存】** —— 前ステップのメモリ内アセンブリを使い、行ごとに Protobuf オブジェクトへ格納し、`.bytes` として `Assets/ProductAssets/Config/` へ出力。あわせてプレーンテキスト `.txt` を `Assets/UnProductAssets/Config/` へ出力します。
 
 > [!TIP]
 > 各 Sheet からは 2 つの message が生成されます。データクラス `SheetName` と、コンテナ `SheetName_Map`（内部は `map<int32, SheetName> Items`）です。ランタイムではコンテナを解析するだけで、主キー `Id` から任意の行を高速に参照できます。
@@ -124,8 +134,22 @@ ExcelToProtobuf/
 | （データ）     | 1001 | AttrCheck | `__END__` |
 
 ### 2. ツールを実行する
-`Tools/ExcelToProtobuf/bin/Debug/ExcelToProtobuf.exe`（または `bin/Release/` の同名プログラム）をダブルクリックします。  
-コンソールに 6 ステップのログが順に出力され、「流程执行完毕，按任意键退出」（処理完了、任意のキーで終了）が表示されれば成功です。
+リポジトリのルートで実行します（初回は NuGet 依存を自動復元）：
+```bash
+dotnet run --project Tools/ExcelToProtobuf
+```
+コンソールに 6 ステップのログが順に出力され、末尾に「流程执行完毕」（処理完了）が表示されれば成功です。
+
+「ダブルクリック実行」の携帯プログラムが欲しい場合は、自己完結型 exe を発行します：
+```bash
+dotnet publish Tools/ExcelToProtobuf -c Release -r win-x64 --self-contained
+```
+
+既定のパスはコマンドライン引数で上書きできます。例：
+```bash
+dotnet run --project Tools/ExcelToProtobuf -- --excel D:/MyGame/Config/Excel --bytes-out D:/MyGame/Assets/Config
+```
+対応引数：`--excel`、`--proto-src`、`--proto-out`、`--cs-gen`、`--cs-out`、`--bytes-out`、`--txt-out`。
 
 ### 3. 成果物を確認する
 実行に成功すると、次の場所に生成された成果物が確認できます。
@@ -186,26 +210,37 @@ ExcelToProtobuf/
 辞書型のセルは `{}` で囲み、要素間はカンマ `,`、キーと値はコロン `:` で区切ります（例：`{1:100,2:200}`）。
 
 ## 🧩 Unity での使い方
-生成された C# クラスは標準の Protobuf メッセージです。ランタイムではコンテナの `Parser` で `.bytes` をデシリアライズします。以下は**サンプル**です（実際のアセット読込方法はプロジェクト次第：`Resources` / `Addressables` / `StreamingAssets` など）。
+### 導入（UPM、git URL）
+`Window → Package Manager → + → Install package from git URL...` で次を貼り付けます：
+```
+https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf
+```
+または `Packages/manifest.json` の `dependencies` に追加：
+```json
+"com.alefeng.exceltoprotobuf": "https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf"
+```
+パッケージには `Google.Protobuf` が同梱され、ランタイム読込クラス `ConfigManager` を提供します。
 
+> [!NOTE]
+> 本リポジトリの `Assets/Plugins/Google.Protobuf/` は**サンプルプロジェクト用**の依存です。上記の UPM パッケージで `Google.Protobuf` を導入済みなら、このフォルダを重ねてコピーしないでください（アセンブリ重複の衝突を避けるため）。
+
+### ConfigManager で読み込む（推奨）
+変換ツールが出力した `.bytes` を `Resources/Config/` に置き（例：`Resources/Config/Adventure_Condition.bytes`）、生成された `.cs` クラスをプロジェクトに追加してから：
 ```csharp
-using Deploy; // 生成クラスの名前空間
+using Deploy;            // 生成クラス
+using ExcelToProtobuf;   // UPM パッケージの読込クラス
 
-// 1. 任意の方法で .bytes のバイト配列を取得（ここでは Resources を例に）
-TextAsset asset = Resources.Load<TextAsset>("Config/Adventure_Condition");
-
-// 2. コンテナクラス（SheetName_Map）を解析
-Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
-
-// 3. 主キー Id で任意の行を直接参照
-Adventure_Condition cfg = map.Items[1001];
+var config = new ConfigManager();                                    // 既定は Resources/Config
+Adventure_Condition_Map map = config.Load<Adventure_Condition_Map>(); // 型名から表名を推定、キャッシュ付き
+Adventure_Condition cfg = map.Items[1001];                           // 主キー Id で行を取得
 Debug.Log(cfg.ClassName);
+```
+読込元を変える場合（Addressables / StreamingAssets など）は `IConfigBytesProvider` を実装し、`new ConfigManager(myProvider)` を渡します。
 
-// すべての行を列挙することも可能
-foreach (var kv in map.Items)
-{
-    Debug.Log($"{kv.Key} => {kv.Value.ClassName}");
-}
+### 手動でパースする（パッケージ不使用）
+生成クラスは標準の Protobuf メッセージなので、コンテナの `Parser` で直接デシリアライズもできます：
+```csharp
+Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
 ```
 
 > [!TIP]
@@ -216,10 +251,10 @@ foreach (var kv in map.Items)
 ### 新しいコンフィグ表を追加する
 1. `Config/Excel/` に新しい `.xlsx` を作成します（既存ブックに Sheet を追加してもよい）。
 2. [記入ルール](#-excel-記入ルール) に従い、4 行のヘッダーとデータ行を記入します。
-3. `ExcelToProtobuf.exe` を再実行します。生成クラスは Unity へ自動同期され、不要になった旧表のクラスは自動的に削除されます。
+3. `dotnet run --project Tools/ExcelToProtobuf` を再実行します。生成クラスは Unity へ自動同期され、不要になった旧表のクラスは自動的に削除されます。
 
 ### 手書きの proto ファイル
-Excel 由来でないデータ構造（共通の enum やネスト構造など）がある場合は、手書きの `.proto` を `Config/Proto/` に置きます。実行時に `Protos/` へコピーされ、まとめて C# にコンパイルされます。
+Excel 由来でないデータ構造（共通の enum やネスト構造など）がある場合は、手書きの `.proto` を `Config/Proto/` に置きます。表から生成された proto とまとめて C# にコンパイルされます。
 
 ### データ型を拡張する
 新しいフィールド型に対応するには、2 か所のマッピングを（整合を保って）修正します。
@@ -229,16 +264,15 @@ Excel 由来でないデータ構造（共通の enum やネスト構造など�
 ## 🚧 注意事項と FAQ
 - **Sheet 名は重複不可**：異なる Excel ファイルであっても Sheet 名はグローバルに一意である必要があります。さもないとコンテナクラスの衝突により「Excel の Sheet 名が重複している可能性」というエラーになります。
 - **proto ファイル名は重複不可**：すべての `.proto` は同一フォルダに集約してコンパイルされるため、異なるフォルダにあっても同名にはできません（`Config/Proto/` の手書き proto を含む）。
-- **ディレクトリ構造を保つ**：ツールは相対パスで入出力フォルダを特定します。`Config/`、`Assets/…/Config/`、`Tools/ExcelToProtobuf/` の相対階層は動かさないでください。
-- **csc / protoc のパス**：`BuildDLL.bat` は `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` に依存し、`protoc` のバージョンは `3.11.2` です。環境が異なる場合は適宜調整してください。
+- **入出力パス**：既定では実行ファイルの位置から上方向に `Config/Excel` を含むリポジトリルートを探索します。構成が異なる場合は引数（`--excel` / `--cs-out` / `--bytes-out` など）で明示指定してください。
+- **依存とバージョン**：`protoc` と `Google.Protobuf` は NuGet から取得し、`3.11.2` に固定（パッケージ同梱の Unity 用 `Google.Protobuf.dll` と互換）。システムの `csc` や protoc の手動インストールは不要です。
 - **表の有効性**：4 行のヘッダー＋終了マーカーを含む表のみ有効と認識されます。データ行の先頭列が `__END__` になると読み取りを停止します。
 
 ## 📋 To-Do リスト
+- ✅ 完了：SDK スタイル + NuGet 依存でクリーンなクローンからビルド可能；`.bat` とハードコードの `csc.exe` を撤廃（Roslyn メモリ内コンパイル）；クロスプラットフォーム `protoc`；パスの引数化；UPM パッケージ化とランタイム `ConfigManager` の提供。
 - **堅牢性**
-  - 固定の絶対パス `csc.exe` への依存を解消し、より柔軟な .NET／ビルド環境に対応する。
   - より充実したエラー通知と失敗時の中断処理（現在は一部のエラーがログ出力後に続行される）。
-- **クロスプラットフォーム**
-  - `.bat` と win64 `protoc` から脱却し、クロスプラットフォーム（macOS / Linux）での実行方法を模索する。
+  - 配列/辞書のパースで値に区切り文字（`,` / `:`）を含むケースへの対応（現在は素朴な分割、既知の制限）。
 - **使いやすさ**
   - GUI または Unity エディタ内のワンクリックエクスポート導線を提供する。
-  - パスやエクスポート設定を構成可能にする（現在のハードコードされたディレクトリ規約に代えて）。
+  - ツールとパッケージ全体で、より新しい `Google.Protobuf` バージョンへの整合・更新。

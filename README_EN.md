@@ -58,7 +58,7 @@ This tool stands on the following open-source projects — thanks to them:
 ## Features
 | Feature              | Description                                                                                        |
 | -------------------- | ------------------------------------------------------------------------------------------------- |
-| One-click pipeline   | Double-clicking `ExcelToProtobuf.exe` runs the whole Excel→Proto→C#→DLL→binary chain, hands-free.    |
+| One-click pipeline   | A single command runs the whole Excel→Proto→C#→(in-memory compile)→binary chain, hands-free.         |
 | Excel-driven         | Field names, data types and data all come from the Excel sheets; designers just edit sheets.        |
 | Strongly typed       | Generates standard Protobuf C# classes; read config in a strongly typed way via a `Map<int, T>` key. |
 | Efficient binary     | The runtime loads compact Protobuf binaries (`.bytes`) — small and fast to parse, fit for shipping.  |
@@ -68,11 +68,14 @@ This tool stands on the following open-source projects — thanks to them:
 | Extensible proto     | Hand-written `.proto` files under `Config/Proto` are compiled together with the generated ones.      |
 
 ## 💻 Requirements
-- **Windows** OS. The pipeline relies on `.bat` scripts, `protoc.exe` (win64) and the system `csc.exe`, so only Windows is supported for now.
-- **.NET Framework 4.7.1** (see `App.config`). Compiling `ConfigProto.dll` uses `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`, so that path must exist.
-- **protoc 3.11.2** (bundled at `Tools/ExcelToProtobuf/protoc-3.11.2-win64/`; no separate install needed).
-- **NPOI / Google.Protobuf** (the relevant DLLs are bundled under `bin/Debug`; no separate install needed).
-- The consumer side is a **Unity project**; at runtime it needs a reference to `Google.Protobuf` to deserialize the `.bytes` data.
+**Converter tool (standalone .NET program, runs outside Unity)**
+- **.NET 8 SDK** or newer. It's an SDK-style project: build/run with `dotnet build` / `dotnet run`, or `dotnet publish` into a self-contained portable exe to keep the double-click experience.
+- All dependencies are restored from NuGet: `NPOI` (reads xlsx), `Google.Protobuf` and `Google.Protobuf.Tools` (bundled cross-platform `protoc`), and `Microsoft.CodeAnalysis.CSharp` (Roslyn in-memory compile).
+- **Cross-platform**: runs on Windows / macOS / Linux — no more `.bat` scripts or system `csc.exe`.
+
+**Unity runtime package (UPM)**
+- Unity **2021.3** or newer; scripting API compatibility level `.NET Standard 2.0/2.1`.
+- Ships `Google.Protobuf` (netstandard2.0) inside the package to deserialize `.bytes`, so nothing extra to install.
 
 ## 📁 Directory Layout
 ```
@@ -81,32 +84,39 @@ ExcelToProtobuf/
 │  ├─ Excel/                                  # ← Sheets authored by designers (*.xlsx) — the input
 │  └─ Proto/                                  # ← Hand-written .proto (optional, compiled together)
 │
-├─ Assets/                                    # Unity project
+├─ Assets/                                    # Example / consumer (Unity assets)
+│  ├─ Plugins/Google.Protobuf/                # Google.Protobuf.dll (so the generated classes compile here)
 │  ├─ Source/System/ConfigSystem/Config/      # → Generated config classes *.cs (auto-synced, incremental)
 │  ├─ ProductAssets/Config/                   # → Serialized binaries *.bytes (loaded at runtime)
 │  └─ UnProductAssets/Config/                 # → Plain-text *.txt (for verification, not shipped)
 │
-└─ Tools/ExcelToProtobuf/
-   ├─ bin/Debug|Release/ExcelToProtobuf.exe   # Main program (double-click to run)
-   ├─ Protos/                                 # Intermediate: generated / collected .proto
-   ├─ Csharp/                                 # Intermediate: protoc-generated .cs and the compiled ConfigProto.dll
-   ├─ protoc.exe · protoc-3.11.2-win64/       # protobuf compiler
-   ├─ BuildProtos.bat                         # .proto → .cs
-   └─ BuildDLL.bat                            # .cs → ConfigProto.dll
+├─ com.alefeng.exceltoprotobuf/               # UPM package (installable via git URL)
+│  ├─ package.json
+│  ├─ Runtime/                                # ConfigManager, byte providers, asmdef, Plugins/Google.Protobuf.dll
+│  └─ Samples~/BasicUsage/                    # Runtime loading sample
+│
+└─ Tools/ExcelToProtobuf/                     # Converter (standalone .NET 8 CLI tool)
+   ├─ ExcelToProtobuf.csproj · .sln           # SDK-style project (NuGet-restored, builds from a clean clone)
+   ├─ Program.cs                              # Pipeline orchestration + path config
+   ├─ PipelineConfig.cs                       # Input/output paths (default repo layout, overridable via args)
+   ├─ Excel2Proto.cs                          # Excel → .proto
+   ├─ Excel2Bytes.cs                          # Excel → .bytes / .txt
+   ├─ ProtocRunner.cs                         # Invokes protoc (.proto → .cs)
+   └─ RoslynCompiler.cs                       # Roslyn in-memory compile of .cs (for reflective serialization)
 ```
 
 > [!NOTE]
-> The program locates every path by **relative directory structure**: from the executable's `bin/Debug` (or `bin/Release`) it walks up two levels to `Tools/ExcelToProtobuf`, then two more to the repo root. Keep this layout intact and just double-click the exe under `bin`.
+> The tool locates paths by **walking up** from the executable to find the repo root containing `Config/Excel`, so no fixed nesting is required. Any path can be overridden via command-line args (see [Run the tool](#2-run-the-tool)).
 
 ## 🔄 Pipeline
 The main program (`Program.cs`) runs the following 6 steps in order, printing progress for each to the console:
 
-1. **[Excel → Proto]** — Scans every `.xlsx` under `Config/Excel/` and generates one `.proto` file **per Sheet**, into `Tools/ExcelToProtobuf/Protos/`.
-2. **[Copy proto]** — Copies the hand-written `.proto` from `Config/Proto/` into `Protos/` as well, so they compile together with the generated ones.
-3. **[Proto → C#]** — Calls `BuildProtos.bat` (which runs `protoc`) to generate C# classes from `Protos/*.proto` into `Csharp/`.
-4. **[Copy C# to Unity]** — Syncs `Csharp/*.cs` into `Assets/Source/System/ConfigSystem/Config/`. Files are hash-compared: **unchanged are skipped, changed are overwritten, obsolete are deleted**.
-5. **[C# → DLL]** — Calls `BuildDLL.bat` (which runs `csc`) to compile `Csharp/*.cs` into `ConfigProto.dll` (loaded by reflection in the next step).
-6. **[Serialize config data]** — Loads `ConfigProto.dll`, reads the Excel data rows again, fills a Protobuf object per row, serializes to `.bytes` into `Assets/ProductAssets/Config/`, and also writes plain-text `.txt` into `Assets/UnProductAssets/Config/`.
+1. **[Excel → Proto]** — Scans every `.xlsx` under `Config/Excel/` and generates one `.proto` file **per Sheet** (into an intermediate directory).
+2. **[Copy proto]** — Brings in the hand-written `.proto` from `Config/Proto/` too, so they compile together with the generated ones.
+3. **[Proto → C#]** — Invokes `protoc` directly (from the NuGet `Google.Protobuf.Tools`, cross-platform) to generate C# classes from the `.proto` files.
+4. **[Copy C# to Unity]** — Syncs the generated `*.cs` into `Assets/Source/System/ConfigSystem/Config/`. Files are hash-compared: **unchanged are skipped, changed are overwritten, obsolete are deleted**.
+5. **[C# in-memory compile]** — Uses **Roslyn** to compile the generated `.cs` into an in-memory assembly (no more `ConfigProto.dll` on disk, no dependency on the system `csc`).
+6. **[Serialize config data]** — Using that in-memory assembly, fills a Protobuf object per row, serializes to `.bytes` into `Assets/ProductAssets/Config/`, and writes plain-text `.txt` into `Assets/UnProductAssets/Config/`.
 
 > [!TIP]
 > Each Sheet produces two messages: the data class `SheetName` and the container `SheetName_Map` (internally a `map<int32, SheetName> Items`). At runtime you only parse the container and index any row quickly by its primary key `Id`.
@@ -124,8 +134,22 @@ Fill the header and data following the [📊 Excel Authoring Rules](#-excel-auth
 | (data)       | 1001 | AttrCheck | `__END__` |
 
 ### 2. Run the tool
-Double-click `Tools/ExcelToProtobuf/bin/Debug/ExcelToProtobuf.exe` (or the same program under `bin/Release/`).  
-The console prints the logs of the 6 steps in order; "流程执行完毕，按任意键退出" (pipeline finished, press any key to exit) means success.
+From the repo root (the first run restores NuGet dependencies):
+```bash
+dotnet run --project Tools/ExcelToProtobuf
+```
+The console prints the logs of the 6 steps in order; "流程执行完毕" (pipeline finished) means success.
+
+For a double-click portable program, publish a self-contained exe:
+```bash
+dotnet publish Tools/ExcelToProtobuf -c Release -r win-x64 --self-contained
+```
+
+Override default paths via command-line args, e.g.:
+```bash
+dotnet run --project Tools/ExcelToProtobuf -- --excel D:/MyGame/Config/Excel --bytes-out D:/MyGame/Assets/Config
+```
+Supported args: `--excel`, `--proto-src`, `--proto-out`, `--cs-gen`, `--cs-out`, `--bytes-out`, `--txt-out`.
 
 ### 3. Inspect the output
 After a successful run, you'll find the generated artifacts here:
@@ -186,26 +210,37 @@ There are two ways to author an array — pick either:
 Wrap a map cell in `{}`, separate entries with commas `,`, and separate key and value with a colon `:`, e.g. `{1:100,2:200}`.
 
 ## 🧩 Using in Unity
-The generated C# classes are standard Protobuf messages; at runtime you deserialize the `.bytes` via the container's `Parser`. The following is an **example** (the actual asset-loading method depends on your project — `Resources` / `Addressables` / `StreamingAssets`):
+### Install (UPM, git URL)
+`Window → Package Manager → + → Install package from git URL...`, then paste:
+```
+https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf
+```
+Or add to `dependencies` in `Packages/manifest.json`:
+```json
+"com.alefeng.exceltoprotobuf": "https://github.com/AleFeng/ExcelToProtobuf.git?path=com.alefeng.exceltoprotobuf"
+```
+The package bundles `Google.Protobuf` and provides the `ConfigManager` runtime loader.
 
+> [!NOTE]
+> This repo's `Assets/Plugins/Google.Protobuf/` is for the **example project's own** compilation; if you already pulled in `Google.Protobuf` via the UPM package above, don't also copy that folder into your project — it would cause a duplicate-assembly conflict.
+
+### Load with ConfigManager (recommended)
+Put the converter's `.bytes` under `Resources/Config/` (e.g. `Resources/Config/Adventure_Condition.bytes`), add the generated `.cs` classes to your project, then:
 ```csharp
-using Deploy; // namespace of the generated classes
+using Deploy;            // generated classes
+using ExcelToProtobuf;   // loader from the UPM package
 
-// 1. Obtain the .bytes byte array any way you like (Resources shown here)
-TextAsset asset = Resources.Load<TextAsset>("Config/Adventure_Condition");
-
-// 2. Parse the container class (SheetName_Map)
-Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
-
-// 3. Index a row directly by its primary key Id
-Adventure_Condition cfg = map.Items[1001];
+var config = new ConfigManager();                                    // defaults to Resources/Config
+Adventure_Condition_Map map = config.Load<Adventure_Condition_Map>(); // table name inferred from type, cached
+Adventure_Condition cfg = map.Items[1001];                           // index a row by primary key Id
 Debug.Log(cfg.ClassName);
+```
+For a different source (Addressables / StreamingAssets, etc.), implement `IConfigBytesProvider` and pass `new ConfigManager(myProvider)`.
 
-// Or iterate over all rows
-foreach (var kv in map.Items)
-{
-    Debug.Log($"{kv.Key} => {kv.Value.ClassName}");
-}
+### Manual parsing (without the package)
+The generated classes are standard Protobuf messages, so you can also deserialize via the container's `Parser`:
+```csharp
+Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.bytes);
 ```
 
 > [!TIP]
@@ -216,10 +251,10 @@ foreach (var kv in map.Items)
 ### Add a new config sheet
 1. Create a new `.xlsx` under `Config/Excel/` (or add a Sheet to an existing workbook).
 2. Fill the 4 header rows and the data rows per the [authoring rules](#-excel-authoring-rules).
-3. Re-run `ExcelToProtobuf.exe`. The generated class is auto-synced to Unity, and obsolete old-sheet classes are cleaned up automatically.
+3. Re-run `dotnet run --project Tools/ExcelToProtobuf`. The generated class is auto-synced to Unity, and obsolete old-sheet classes are cleaned up automatically.
 
 ### Hand-written proto files
-If you have data structures that don't come from Excel (shared enums, nested structures, etc.), put the hand-written `.proto` under `Config/Proto/`. At run time they're copied into `Protos/` and compiled to C# together.
+If you have data structures that don't come from Excel (shared enums, nested structures, etc.), put the hand-written `.proto` under `Config/Proto/`. They are compiled to C# together with the sheet-generated protos.
 
 ### Extend data types
 To support a new field type, update both mappings (keep them consistent):
@@ -229,16 +264,15 @@ To support a new field type, update both mappings (keep them consistent):
 ## 🚧 Notes & FAQ
 - **Sheet names must be unique**: even across different Excel files, Sheet names must be globally unique, otherwise a container-class conflict raises the "possible duplicate Excel Sheet name" error.
 - **Proto files must not share names**: since all `.proto` are collected into one folder to compile, they can't share names even across folders (including hand-written ones under `Config/Proto/`).
-- **Keep the directory structure**: the tool locates input/output folders by relative paths — don't move the relative layout of `Config/`, `Assets/…/Config/`, or `Tools/ExcelToProtobuf/`.
-- **csc / protoc paths**: `BuildDLL.bat` relies on `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`; the `protoc` version is `3.11.2`. Adjust for a different environment.
+- **Input/output paths**: by default the tool walks up from the executable to find the repo root containing `Config/Excel`; if your layout differs, pass explicit args (`--excel` / `--cs-out` / `--bytes-out`, etc.).
+- **Dependencies & version**: `protoc` and `Google.Protobuf` come from NuGet, pinned to `3.11.2` (compatible with the Unity `Google.Protobuf.dll` shipped in the package); no system `csc` or manual protoc install needed.
 - **Sheet validity**: a table is only recognized as valid if it has at least 4 header rows plus the end marker; data reading stops when the first column of a data row is `__END__`.
 
 ## 📋 To-Do List
+- ✅ Done: SDK-style project + NuGet deps that build from a clean clone; removed `.bat` and the hard-coded `csc.exe` (now Roslyn in-memory compile); cross-platform `protoc`; parameterized paths; packaged as UPM with a runtime `ConfigManager`.
 - **Robustness**
-  - Remove the dependency on the fixed absolute `csc.exe` path; support more flexible .NET / build environments.
   - Better error reporting and fail-fast handling (some errors currently just log and continue).
-- **Cross-platform**
-  - Move away from `.bat` and win64 `protoc`; explore a cross-platform (macOS / Linux) runner.
+  - Array/map parsing when values contain the delimiters (`,` / `:`) — currently a naive split (known limitation).
 - **Usability**
   - Provide a GUI or an in-Unity one-click export entry.
-  - Support configurable paths and export options (instead of the current hard-coded directory convention).
+  - Align/upgrade to a newer `Google.Protobuf` version across tool and package.

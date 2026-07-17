@@ -7,12 +7,16 @@ using System.Text;
 
 namespace ExcelToProtobuf
 {
-    public class Excel2Proto //excel转.proto
+    // excel转.proto
+    public class Excel2Proto
     {
         private static string m_DestPathDirProto = string.Empty;
         private static string m_ContentFormat = "syntax = \"proto3\";\npackage deploy;\n\nmessage fileName\n{\ncontent}\n\nmessage fileName_Map\n{\n\tmap<int32, fileName> Items = 1;\n}\n";
 
         private static string m_SrcPathDirExcel = string.Empty;
+
+        // UTF-8 无 BOM
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
 
         //创建客户端Proto文件
         public static void Compiler(string srcPathDirExcel, string destPathDirProto)
@@ -73,7 +77,7 @@ namespace ExcelToProtobuf
         //创建.proto文件
         private static void CreateProtoFile(ISheet sheet)
         {
-			List<string> repeatedList = new List<string>(); //已经处理过的数组
+            List<string> repeatedList = new List<string>(); //已经处理过的数组
             StringBuilder stringBuilder = new StringBuilder();
 
             int Nums = sheet.LastRowNum;
@@ -90,20 +94,20 @@ namespace ExcelToProtobuf
                         string typeName = GetProtoType(sheet.GetRow(3).GetCell(i).StringCellValue.Trim()); // 类型名字
                         string valName = sheet.GetRow(1).GetCell(i).StringCellValue; // 字段名字
 
-						//是否为repeated
-						if (valName.Contains("_"))
-						{
-							valName = valName.Split('_')[0];
-							if (repeatedList.Contains(valName))
-							{
-								continue;
-							}
-							else
-							{
-								repeatedList.Add(valName);
-								typeName = $"repeated {typeName}";
-							}
-						}
+                        //是否为repeated
+                        if (valName.Contains("_"))
+                        {
+                            valName = valName.Split('_')[0];
+                            if (repeatedList.Contains(valName))
+                            {
+                                continue;
+                            }
+                            else
+                            {
+                                repeatedList.Add(valName);
+                                typeName = $"repeated {typeName}";
+                            }
+                        }
 
                         index++;
                         stringBuilder.Append($"\t{typeName}");
@@ -122,13 +126,10 @@ namespace ExcelToProtobuf
                     proto = proto.Replace("content", stringBuilder.ToString());
                     string outPathFile = Path.Combine(m_DestPathDirProto, sheet.SheetName) + ".proto"; //生成的proto文件路径
 
-                    using (FileStream fs = new FileStream(outPathFile, FileMode.Append, FileAccess.Write))
-                    {
-                        byte[] datas = Encoding.Default.GetBytes(proto);
-                        fs.Write(datas, 0, datas.Length);
-                    }
+                    // 以 UTF-8（无 BOM）写出，避免依赖系统默认编码
+                    File.WriteAllText(outPathFile, proto, Utf8NoBom);
 
-					Console.WriteLine($">> 转换完成 >> {sheet.SheetName}");
+                    Console.WriteLine($">> 转换完成 >> {sheet.SheetName}");
                 }
             }
         }
@@ -142,13 +143,16 @@ namespace ExcelToProtobuf
                 case "key":
                     return "int32";
                 case "intArray":
+                case "intarray":
                     return "repeated int32";
                 case "string":
                     return "string";
                 case "stringArray":
+                case "stringarray":
                     return "repeated string";
                 case "float":
                     return "float";
+                case "floatArray":
                 case "floatarray":
                     return "repeated float";
                 case "map<int,int>":
@@ -161,7 +165,6 @@ namespace ExcelToProtobuf
                     return "map<string,int32>";
                 default:
                     Console.WriteLine($">> 转换失败 >> 数据类型未定义-{typeName} 配置表-{m_SrcPathDirExcel}");
-                    Console.ReadKey();
                     return typeName;
             }
         }
