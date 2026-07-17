@@ -54,6 +54,7 @@ This tool stands on the following open-source projects — thanks to them:
   - [Extend data types](#extend-data-types)
 - [🚧 Notes & FAQ](#-notes--faq)
 - [📋 To-Do List](#-to-do-list)
+- [📄 License](#-license)
 
 ## Features
 | Feature              | Description                                                                                        |
@@ -276,3 +277,6 @@ To support a new field type, update both mappings (keep them consistent):
 - **Usability**
   - Provide a GUI or an in-Unity one-click export entry.
   - Align/upgrade to a newer `Google.Protobuf` version across tool and package.
+
+## 📄 License
+Released under the **MIT** license — see [LICENSE](LICENSE).

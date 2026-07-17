@@ -4,7 +4,7 @@
   "displayName": "Excel To Protobuf",
   "description": "将 Excel 配置表转换为 Protobuf 的 C# 类与二进制配置数据。本 UPM 包提供 Unity 运行时加载器（ConfigManager）与 Google.Protobuf 依赖；配套的 Excel 转换器为独立 .NET 工具，在 Unity 外运行。",
   "unity": "2021.3",
-  "license": "GPL-2.0-only",
+  "license": "MIT",
   "keywords": [
     "excel",
     "protobuf",

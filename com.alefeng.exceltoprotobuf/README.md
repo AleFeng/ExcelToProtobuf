@@ -45,4 +45,4 @@ Common_Quality row = map.Items[1];                       // 按主键取一行
 在 Package Manager 中选中本包 → `Samples` → 导入 **Basic Usage**，把 `ConfigDemo` 挂到场景物体上运行即可看到日志输出。
 
 ## 许可
-GPL-2.0（见 `LICENSE.md`）。
+MIT（见 `LICENSE.md`）。

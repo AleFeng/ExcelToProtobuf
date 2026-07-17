@@ -54,6 +54,7 @@ ExcelToProtobuf 是一套面向 `Unity` 项目的**配置表工作流工具**，
   - [扩展数据类型](#扩展数据类型)
 - [🚧 注意事项与常见问题](#-注意事项与常见问题)
 - [📋 待办事项列表](#-待办事项列表)
+- [📄 许可](#-许可)
 
 ## 工具特性
 | 特性             | 描述                                                                                     |
@@ -276,3 +277,6 @@ Adventure_Condition_Map map = Adventure_Condition_Map.Parser.ParseFrom(asset.byt
 - **易用性**
   - 提供图形界面或 Unity 编辑器内一键导出入口。
   - 支持多版本 `Google.Protobuf` 与更高 protobuf 版本的对齐升级。
+
+## 📄 许可
+本项目采用 **MIT** 许可，详见 [LICENSE](LICENSE)。
